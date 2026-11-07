@@ -34,6 +34,8 @@ const http = require('http');
 const WebSocket = require('ws');
 const { spawn } = require('child_process');
 const twilio = require('twilio');
+const ffmpegPath = require('ffmpeg-static');
+console.log('ffmpeg path:', ffmpegPath);
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -62,12 +64,12 @@ app.post('/twiml', (req, res) => {
 // --- Audio helpers ---
 // mulaw 8kHz (Twilio) -> PCM 48kHz stereo, via ffmpeg, as a readable stream
 function mulawToPcm48k() {
-  return spawn('ffmpeg', ['-f', 'mulaw', '-ar', '8000', '-ac', '1', '-i', 'pipe:0',
+  return spawn(ffmpegPath || 'ffmpeg', ['-f', 'mulaw', '-ar', '8000', '-ac', '1', '-i', 'pipe:0',
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { stdio: ['pipe', 'pipe', 'ignore'] });
 }
 // PCM 48kHz stereo (Discord) -> mulaw 8kHz mono, via ffmpeg
 function pcm48kToMulaw() {
-  return spawn('ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0',
+  return spawn(ffmpegPath || 'ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0',
     '-f', 'mulaw', '-ar', '8000', '-ac', '1', 'pipe:1'], { stdio: ['pipe', 'pipe', 'ignore'] });
 }
 
@@ -209,7 +211,7 @@ client.on('messageCreate', async (msg) => {
     if (cmd === 'playphone') {
       if (!bridge || !bridge.twilioWs) return msg.reply('No active call. Use `!call` first, then `!playphone <url>`.');
       // Stream the clip to Twilio: ffmpeg URL -> mulaw 8kHz -> media stream
-      const ff = spawn('ffmpeg', ['-i', url, '-f', 'mulaw', '-ar', '8000', '-ac', '1', 'pipe:1'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const ff = spawn(ffmpegPath || 'ffmpeg', ['-i', url, '-f', 'mulaw', '-ar', '8000', '-ac', '1', 'pipe:1'], { stdio: ['ignore', 'pipe', 'ignore'] });
       ff.stdout.on('data', (chunk) => {
         if (bridge.twilioWs.readyState === WebSocket.OPEN) {
           bridge.twilioWs.send(JSON.stringify({ event: 'media', streamSid: bridge.streamSid, media: { payload: chunk.toString('base64') } }));
@@ -231,7 +233,9 @@ client.on('messageCreate', async (msg) => {
       connection._player = player;
     }
     // ffmpeg fetches the URL and outputs Opus-ready PCM for Discord
-    const ff = spawn('ffmpeg', ['-i', url, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const ff = spawn(ffmpegPath || 'ffmpeg', ['-i', url, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    ff.stderr.on('data', (d) => console.log('play ffmpeg:', d.toString().slice(0, 500)));
+    ff.on('error', (e) => console.log('play ffmpeg spawn error:', e.message));
     const resource = createAudioResource(ff.stdout, { inputType: 'arbitrary' });
     player.play(resource);
     await msg.reply(`Playing ${url} in ${msg.member.voice.channel.name}. Use \`!stop\` to stop it.`);
@@ -263,7 +267,7 @@ client.on('messageCreate', async (msg) => {
     fs.mkdirSync('recordings', { recursive: true });
     const file = `recordings/${guildId}-${Date.now()}.mp3`;
     // ffmpeg: PCM 48kHz stereo in -> MP3 out (128k, compressed)
-    const ff = spawn('ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0', '-codec:a', 'libmp3lame', '-b:a', '128k', '-y', file], { stdio: ['pipe', 'ignore', 'ignore'] });
+    const ff = spawn(ffmpegPath || 'ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0', '-codec:a', 'libmp3lame', '-b:a', '128k', '-y', file], { stdio: ['pipe', 'ignore', 'ignore'] });
     conn._recording = { ff, file, channel: msg.channel, streams: new Map() };
     // Auto-stop after 15 minutes: end ffmpeg, then upload the MP3 to chat
     conn._recording.timer = setTimeout(async () => {
