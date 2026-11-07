@@ -27,7 +27,7 @@
  */
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, EndBehaviorType, getVoiceConnection } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, EndBehaviorType, getVoiceConnection, StreamType } = require('@discordjs/voice');
 const prism = require('prism-media');
 const express = require('express');
 const http = require('http');
@@ -89,7 +89,7 @@ wss.on('connection', (ws) => {
       bridge.streamSid = streamSid;
       // Start phone -> Discord audio
       toDiscord = mulawToPcm48k();
-      const resource = createAudioResource(toDiscord.stdout, { inputType: 'arbitrary' });
+      const resource = createAudioResource(toDiscord.stdout, { inputType: StreamType.Raw });
       bridge.player.play(resource);
       console.log('Media stream started', streamSid);
     }
@@ -236,7 +236,7 @@ client.on('messageCreate', async (msg) => {
     const ff = spawn(ffmpegPath || 'ffmpeg', ['-i', url, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
     ff.stderr.on('data', (d) => console.log('play ffmpeg:', d.toString().slice(0, 500)));
     ff.on('error', (e) => console.log('play ffmpeg spawn error:', e.message));
-    const resource = createAudioResource(ff.stdout, { inputType: 'arbitrary' });
+    const resource = createAudioResource(ff.stdout, { inputType: StreamType.Raw });
     player.play(resource);
     await msg.reply(`Playing ${url} in ${msg.member.voice.channel.name}. Use \`!stop\` to stop it.`);
   }
