@@ -27,7 +27,7 @@
  */
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, EndBehaviorType, getVoiceConnection, StreamType } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, EndBehaviorType, getVoiceConnection, StreamType, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const prism = require('prism-media');
 const express = require('express');
 const http = require('http');
@@ -120,6 +120,47 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 
 client.on('ready', () => console.log(`Logged in as ${client.user.tag} — live-talk v2 ready`));
 
+// --- DisTube for !play (direct links + YouTube) ---
+// From https://distube.js.org/distube/popular-topics/direct-links/
+// Direct-links plugin (v6, converted to plain JS): accepts https links
+// ending in .mp3/.ogg/.opus/.wav/.flac/.m4a/.aac/.webm, or Discord CDN attachments.
+const { DisTube, Song } = require('distube');
+const { DiscordJSAdapter } = require('@distube/discordjs');
+const { YouTubePlugin } = require('@distube/youtube');
+const signedInputs = new WeakMap();
+const audioExtension = /\.(?:mp3|ogg|opus|wav|flac|m4a|aac|webm)$/iu;
+function fileName(url) {
+  const last = url.pathname.split('/').at(-1) ?? '';
+  try { return decodeURIComponent(last) || url.hostname; } catch { return last || url.hostname; }
+}
+const directLinks = {
+  name: 'direct-links',
+  async resolve(input) {
+    let url;
+    try { url = new URL(input); } catch { return undefined; }
+    const isAttachment = url.hostname === 'cdn.discordapp.com' && /^\/(?:ephemeral-)?attachments\//u.test(url.pathname);
+    if (url.protocol !== 'https:' || !(isAttachment || audioExtension.test(url.pathname))) return undefined;
+    const id = url.origin + url.pathname;
+    const song = new Song({ source: 'direct-links', id, name: fileName(url), url: id, ageRestricted: false });
+    signedInputs.set(song, input);
+    return song;
+  },
+  async stream(song) {
+    return { kind: 'url', url: signedInputs.get(song) ?? song.url };
+  },
+};
+const distube = new DisTube({
+  adapter: new DiscordJSAdapter(client),
+  plugins: [new YouTubePlugin(), directLinks],
+});
+distube.on('playSong', (queue, song) => console.log('distube: now playing', song.name, song.url));
+distube.on('addSong', (queue, song) => console.log('distube: queued', song.name));
+distube.on('error', (e, queue) => console.log('distube error:', e.message));
+distube.on('empty', (queue) => console.log('distube: voice channel empty'));
+distube.on('finish', (queue) => console.log('distube: finished queue'));
+
+// (voice connection state is logged in !play via entersState)
+
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.content.startsWith('!')) return;
   const [cmd, ...rest] = msg.content.slice(1).split(/\s+/);
@@ -196,6 +237,7 @@ client.on('messageCreate', async (msg) => {
 
   if (cmd === 'leave') {
     endBridge(guildId);
+    try { distube.voices.leave(guildId); } catch {}
     getVoiceConnection(guildId)?.destroy();
     await msg.reply('Left voice.');
   }
@@ -222,36 +264,24 @@ client.on('messageCreate', async (msg) => {
       return;
     }
     if (!msg.member.voice.channel) return msg.reply('Join a voice channel first, then use !play.');
-    let connection = getVoiceConnection(guildId);
-    let player;
-    if (bridge) {
-      connection = bridge.connection;
-      player = bridge.player;
-    } else {
-      connection = joinVoiceChannel({ channelId: msg.member.voice.channelId, guildId, adapterCreator: msg.guild.voiceAdapterCreator, selfDeaf: false, selfMute: false });
-      player = createAudioPlayer();
-      connection.subscribe(player);
-      connection._player = player;
+    // DisTube handles the voice connection, queueing, ffmpeg/Opus and
+    // YouTube + direct-link extraction. If a phone call is active, use
+    // !playphone instead — DisTube would take over the voice channel.
+    if (bridge) return msg.reply('A phone call is active — use `!playphone <url>` to play into the call, or `!hangup` first.');
+    try {
+      await distube.play(msg.member.voice.channel, url, { member: msg.member, textChannel: msg.channel });
+      await msg.reply(`Playing ${url} in ${msg.member.voice.channel.name}. Use \`!stop\` to stop it.`);
+    } catch (e) {
+      console.log('distube play failed:', e.message);
+      await msg.reply(`Couldn't play that: ${e.message}`);
     }
-    // ffmpeg fetches the URL and outputs Opus-ready PCM for Discord
-    const ff = spawn(ffmpegPath || 'ffmpeg', ['-i', url, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    ff.stderr.on('data', (d) => console.log('play ffmpeg:', d.toString().slice(0, 500)));
-    ff.on('error', (e) => console.log('play ffmpeg spawn error:', e.message));
-    const resource = createAudioResource(ff.stdout, { inputType: StreamType.Raw });
-    player.on('error', (e) => console.log('player error:', e.message));
-    player.on(AudioPlayerStatus.Playing, () => console.log('player: now playing'));
-    player.on(AudioPlayerStatus.Idle, () => console.log('player: idle (finished/stopped)'));
-    player.play(resource);
-    console.log('play: resource started, player status:', player.state.status);
-    await msg.reply(`Playing ${url} in ${msg.member.voice.channel.name}. Use \`!stop\` to stop it.`);
   }
 
   if (cmd === 'stop') {
     const bridge = bridges.get(guildId);
     const conn = getVoiceConnection(guildId);
     if (bridge) bridge.player.stop();
-    else if (conn && conn._player) conn._player.stop();
-    else return msg.reply('Nothing playing right now.');
+    else { try { await distube.stop(guildId); } catch (e) { if (conn && conn._player) conn._player.stop(); else return msg.reply('Nothing playing right now.'); } }
     await msg.reply('Stopped. (Play a new clip with `!play <url>`.)');
   }
 
