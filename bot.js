@@ -36,6 +36,7 @@ const { spawn } = require('child_process');
 const twilio = require('twilio');
 const ffmpegPath = require('ffmpeg-static');
 console.log('ffmpeg path:', ffmpegPath);
+try { require('@discordjs/opus'); console.log('opus encoder loaded OK'); } catch (e) { console.log('OPUS LOAD FAILED:', e.message); }
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -227,7 +228,7 @@ client.on('messageCreate', async (msg) => {
       connection = bridge.connection;
       player = bridge.player;
     } else {
-      connection = joinVoiceChannel({ channelId: msg.member.voice.channelId, guildId, adapterCreator: msg.guild.voiceAdapterCreator });
+      connection = joinVoiceChannel({ channelId: msg.member.voice.channelId, guildId, adapterCreator: msg.guild.voiceAdapterCreator, selfDeaf: false, selfMute: false });
       player = createAudioPlayer();
       connection.subscribe(player);
       connection._player = player;
@@ -237,7 +238,11 @@ client.on('messageCreate', async (msg) => {
     ff.stderr.on('data', (d) => console.log('play ffmpeg:', d.toString().slice(0, 500)));
     ff.on('error', (e) => console.log('play ffmpeg spawn error:', e.message));
     const resource = createAudioResource(ff.stdout, { inputType: StreamType.Raw });
+    player.on('error', (e) => console.log('player error:', e.message));
+    player.on(AudioPlayerStatus.Playing, () => console.log('player: now playing'));
+    player.on(AudioPlayerStatus.Idle, () => console.log('player: idle (finished/stopped)'));
     player.play(resource);
+    console.log('play: resource started, player status:', player.state.status);
     await msg.reply(`Playing ${url} in ${msg.member.voice.channel.name}. Use \`!stop\` to stop it.`);
   }
 
@@ -291,6 +296,7 @@ client.on('messageCreate', async (msg) => {
     if (!conn._recordListener) {
       conn._recordListener = true;
       conn.receiver.speaking.on('start', (userId) => {
+        console.log('record: heard user speaking', userId);
         if (!conn._recording) return;
         const opus = conn.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 500 } });
         const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
