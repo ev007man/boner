@@ -120,38 +120,17 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 
 client.on('ready', () => console.log(`Logged in as ${client.user.tag} — live-talk v2 ready`));
 
-// --- DisTube for !play (direct links + YouTube) ---
-// From https://distube.js.org/distube/popular-topics/direct-links/
-// Direct-links plugin (v6, converted to plain JS): accepts https links
-// ending in .mp3/.ogg/.opus/.wav/.flac/.m4a/.aac/.webm, or Discord CDN attachments.
-const { DisTube, Song } = require('distube');
-const { DiscordJSAdapter } = require('@distube/discordjs');
+// --- DisTube v5 for !play (direct links + YouTube) ---
+// v5 is the latest stable on npm (5.2.3). The v6 docs page is for an
+// unreleased version: distube@6 and @distube/discordjs don't exist on npm,
+// and @distube/youtube@1.1.0 needs distube@5 — that's what caused the
+// ERESOLVE error on Render.
+const { DisTube } = require('distube');
 const { YouTubePlugin } = require('@distube/youtube');
-const signedInputs = new WeakMap();
-const audioExtension = /\.(?:mp3|ogg|opus|wav|flac|m4a|aac|webm)$/iu;
-function fileName(url) {
-  const last = url.pathname.split('/').at(-1) ?? '';
-  try { return decodeURIComponent(last) || url.hostname; } catch { return last || url.hostname; }
-}
-const directLinks = {
-  name: 'direct-links',
-  async resolve(input) {
-    let url;
-    try { url = new URL(input); } catch { return undefined; }
-    const isAttachment = url.hostname === 'cdn.discordapp.com' && /^\/(?:ephemeral-)?attachments\//u.test(url.pathname);
-    if (url.protocol !== 'https:' || !(isAttachment || audioExtension.test(url.pathname))) return undefined;
-    const id = url.origin + url.pathname;
-    const song = new Song({ source: 'direct-links', id, name: fileName(url), url: id, ageRestricted: false });
-    signedInputs.set(song, input);
-    return song;
-  },
-  async stream(song) {
-    return { kind: 'url', url: signedInputs.get(song) ?? song.url };
-  },
-};
-const distube = new DisTube({
-  adapter: new DiscordJSAdapter(client),
-  plugins: [new YouTubePlugin(), directLinks],
+const { DirectLinkPlugin } = require('@distube/direct-link');
+const distube = new DisTube(client, {
+  emitNewSongOnly: true,
+  plugins: [new YouTubePlugin(), new DirectLinkPlugin()],
 });
 distube.on('playSong', (queue, song) => console.log('distube: now playing', song.name, song.url));
 distube.on('addSong', (queue, song) => console.log('distube: queued', song.name));
