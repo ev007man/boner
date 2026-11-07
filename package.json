@@ -9,9 +9,9 @@
     "twilio": "^5.0.0",
     "ws": "^8.18.0",
     "ffmpeg-static": "^5.2.0",
-    "distube": "^6.0.0",
-    "@distube/discordjs": "^1.0.0",
-    "@distube/youtube": "^1.0.0"
+    "distube": "^5.2.3",
+    "@distube/youtube": "^1.1.0",
+    "@distube/direct-link": "^1.0.1"
   },
   "description": "Discord bot that bridges live voice to a real phone call via Twilio Media Streams",
   "engines": {
